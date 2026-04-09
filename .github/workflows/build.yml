@@ -19,12 +19,8 @@ jobs:
           apt-get update && apt-get install -y \
             python3.12 python3.12-dev python3-pip \
             wget unzip curl git cmake ninja-build \
-            openjdk-17-jdk \
+            openjdk-17-jdk swig \
             Android-sdk cmdline-tools-latest
-            
-      - name: Setup Python 3.12
-        run: |
-          python3.12 --version
           curl -sS https://bootstrap.pypa.io/get-pip.py | python3.12
           python3.12 -m pip install --upgrade pip
           python3.12 -m pip install numpy wheel
@@ -47,8 +43,14 @@ jobs:
           export ANDROID_NDK=$ANDROID_NDK_HOME
           export PATH=$ANDROID_NDK:$PATH
           cd onnxruntime
-          ./build.sh --android --android_abi arm64-v8a --android_sdk_path /opt/android-sdk --android_ndk_path $ANDROID_NDK --python_version 3.12 --build_wheel --config Release
-        timeout-minutes: 240
+          ./build.sh --android --android_abi arm64-v8a \
+            --android_sdk_path /opt/android-sdk \
+            --android_ndk_path $ANDROID_NDK \
+            --python_version 3.12 \
+            --build_wheel \
+            --config Release \
+            --parallel
+        timeout-minutes: 300
         
       - name: Upload wheel
         if: success()
@@ -57,6 +59,7 @@ jobs:
           name: onnxruntime-cp312-aarch64
           path: onnxruntime/build/Release/dist/*.whl
           retention-days: 30
+          if-no-files-found: error
           
       - name: Upload logs
         if: failure()
@@ -65,3 +68,4 @@ jobs:
           name: build-logs
           path: onnxruntime/build/Release/**/*.log
           retention-days: 7
+          if-no-files-found: ignore
