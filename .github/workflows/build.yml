@@ -1,4 +1,4 @@
-name: Build onnxruntime for Android
+name: Build onnxruntime for Android (Python 3.13)
 
 on:
   workflow_dispatch:
@@ -17,13 +17,13 @@ jobs:
       - name: Install dependencies
         run: |
           apt-get update && apt-get install -y \
-            python3.12 python3.12-dev python3-pip \
+            python3.13 python3.13-dev python3-pip \
             wget unzip curl git cmake ninja-build \
             openjdk-17-jdk swig \
             Android-sdk cmdline-tools-latest
-          curl -sS https://bootstrap.pypa.io/get-pip.py | python3.12
-          python3.12 -m pip install --upgrade pip
-          python3.12 -m pip install numpy wheel
+          curl -sS https://bootstrap.pypa.io/get-pip.py | python3.13
+          python3.13 -m pip install --upgrade pip
+          python3.13 -m pip install numpy wheel
           
       - name: Download Android NDK
         run: |
@@ -36,7 +36,7 @@ jobs:
           
       - name: Download onnxruntime
         run: |
-          git clone --depth 1 --branch v1.19.2 https://github.com/microsoft/onnxruntime
+          git clone --depth 1 --branch v1.24.4 https://github.com/microsoft/onnxruntime
           
       - name: Build
         run: |
@@ -46,7 +46,7 @@ jobs:
           ./build.sh --android --android_abi arm64-v8a \
             --android_sdk_path /opt/android-sdk \
             --android_ndk_path $ANDROID_NDK \
-            --python_version 3.12 \
+            --python_version 3.13 \
             --build_wheel \
             --config Release \
             --parallel
@@ -56,7 +56,7 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: onnxruntime-cp312-aarch64
+          name: onnxruntime-cp313-aarch64
           path: onnxruntime/build/Release/dist/*.whl
           retention-days: 30
           if-no-files-found: error
