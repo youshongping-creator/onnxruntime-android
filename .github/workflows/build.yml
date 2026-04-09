@@ -1,4 +1,4 @@
-name: Build onnxruntime for Android (Python 3.12)
+name: Build onnxruntime for Android
 
 on:
   workflow_dispatch:
@@ -8,56 +8,60 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    container: ubuntu:22.04
     
     steps:
-      - uses: actions/checkout@v4
-      
-      - name: Setup Python 3.12
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Checkout
+        uses: actions/checkout@v4
         
-      - name: Setup NDK
+      - name: Install dependencies
         run: |
-          echo "NDK_VERSION=26b" >> $GITHUB_ENV
-          mkdir -p $ANDROID_HOME/ndk
-          cd $ANDROID_HOME/ndk
-          curl -sL https://dl.google.com/android/repository/android-ndk-r26b-linux.zip -o ndk.zip
-          unzip -q ndk.zip
-          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/android-ndk-r26b" >> $GITHUB_ENV
-          
-      - name: Install Python dependencies
+          apt-get update && apt-get install -y \
+            python3.12 python3.12-dev python3-pip \
+            wget unzip curl git cmake ninja-build \
+            openjdk-17-jdk \
+            Android-sdk cmdline-tools-latest
+            
+      - name: Setup Python 3.12
         run: |
-          python -m pip install --upgrade pip
-          pip install numpy scipy wheel auditwheel
+          python3.12 --version
+          curl -sS https://bootstrap.pypa.io/get-pip.py | python3.12
+          python3.12 -m pip install --upgrade pip
+          python3.12 -m pip install numpy wheel
           
-      - name: Download onnxruntime source
+      - name: Download Android NDK
+        run: |
+          mkdir -p /opt/android-ndk
+          cd /opt/android-ndk
+          wget -q https://dl.google.com/android/repository/android-ndk-r26b-linux.zip
+          unzip -q android-ndk-r26b-linux.zip
+          echo "ANDROID_NDK_HOME=/opt/android-ndk/android-ndk-r26b" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=/opt/android-sdk" >> $GITHUB_ENV
+          
+      - name: Download onnxruntime
         run: |
           git clone --depth 1 --branch v1.19.2 https://github.com/microsoft/onnxruntime
           
-      - name: Build onnxruntime
+      - name: Build
         run: |
-          cd onnxruntime
           export ANDROID_NDK=$ANDROID_NDK_HOME
-          export PATH=$ANDROID_NDK/bin:$PATH
-          mkdir -p build/Release/dist
-          python tools/ci_build/build.py \
-            --android \
-            --android_abis arm64-v8a \
-            --android_sdk_path $ANDROID_HOME \
-            --android_ndk_path $ANDROID_NDK \
-            --python_version 3.12 \
-            --config Release \
-            --build_wheel
-        shell: bash
-        timeout-minutes: 180
+          export PATH=$ANDROID_NDK:$PATH
+          cd onnxruntime
+          ./build.sh --android --android_abi arm64-v8a --android_sdk_path /opt/android-sdk --android_ndk_path $ANDROID_NDK --python_version 3.12 --build_wheel --config Release
+        timeout-minutes: 240
         
       - name: Upload wheel
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: onnxruntime-cp312-aarch64
           path: onnxruntime/build/Release/dist/*.whl
           retention-days: 30
+          
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: onnxruntime/build/Release/**/*.log
+          retention-days: 7
