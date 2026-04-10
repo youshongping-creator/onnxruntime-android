@@ -316,12 +316,11 @@ jobs:
             -DSQLOUD_ROOT=\"$SQLOUD_ROOT\" \
             -Donnxruntime_RUN_ONNX_TESTS=OFF \
             -Donnxruntime_BUILD_SHARED_LIB=ON \
-            -Donnxruntime_ENABLE_PYTHON=ON \
-            -Donnxruntime_PYTHON_EXECUTABLE=\"$(which python3.13)\" \
+            -Donnxruntime_ENABLE_PYTHON=OFF \
             -Donnxruntime_DEV_MODE=OFF \
             -Donnxruntime_BUILD_DEBUG_SYMBOLS=OFF \
             -Donnxruntime_BUILD_UNIT_TESTS=OFF \
-            -Donnxruntime_BUILD_PYTHON_WHEELS=ON \
+            -Donnxruntime_BUILD_PYTHON_WHEELS=OFF \
             -Donnxruntime_MINIMAL_BUILD=OFF \
             -DCMAKE_CXX_FLAGS=\"-D_GLIBCXX_USE_CXX11_ABI=1\""
           
