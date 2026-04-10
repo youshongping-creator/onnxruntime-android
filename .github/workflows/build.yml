@@ -87,7 +87,7 @@ jobs:
             -S .
           
           cmake --build build/Release --config Release --parallel
-        timeout-minutes: 120
+        timeout-minutes: 300
         
       - name: Find built wheel
         run: |
