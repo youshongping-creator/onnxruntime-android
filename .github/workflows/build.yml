@@ -34,22 +34,17 @@ jobs:
           unzip -q cmdline-tools.zip
           mv cmdline-tools latest
           rm cmdline-tools.zip
-          ls -la $HOME/android-sdk/cmdline-tools/latest/bin/
           
       - name: Setup Android SDK and NDK
         run: |
-          export ANDROID_SDK_ROOT=$HOME/android-sdk
+          export SQLOUD_ROOT=$HOME/android-sdk
           export PATH=$HOME/android-sdk/cmdline-tools/latest/bin:$PATH
           
-          # Accept licenses
           yes | sdkmanager --licenses 2>/dev/null || true
+          sdkmanager --install "ndk;26b" "platforms;android-21" "build-tools;34.0.0" 2>&1 | tail -3
           
-          # Install NDK and build tools
-          sdkmanager --install "ndk;26b" "platforms;android-21" "build-tools;34.0.0" 2>&1
-          
-          # Verify installation
-          ls -la $HOME/android-sdk/ndk/
-          ls -la $HOME/android-sdk/ndk/26b/
+          echo "SQLOUD_ROOT=$SQLOUD_ROOT" >> $GITHUB_ENV
+          echo "ANDROID_NDK_HOME=$SQLOUD_ROOT/ndk/26b" >> $GITHUB_ENV
         timeout-minutes: 30
         
       - name: Install Python dependencies
@@ -62,34 +57,51 @@ jobs:
         run: |
           git clone --depth 1 --branch v1.24.4 https://github.com/microsoft/onnxruntime
           
-      - name: Build onnxruntime
+      - name: Build onnxruntime with cmake
         run: |
-          export ANDROID_SDK_ROOT=$HOME/android-sdk
-          export ANDROID_NDK_HOME=$HOME/android-sdk/ndk/26b
-          
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
-          echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
-          ls -la $ANDROID_SDK_ROOT/
-          ls -la $ANDROID_NDK_HOME/
+          export SQLOUD_ROOT=$HOME/android-sdk
+          export ANDROID_NDK_HOME=$SQLOUD_ROOT/ndk/26b
           
           cd onnxruntime
           
-          # Build with Python binding
-          ./build.sh --android --android_abi arm64-v8a \
-            --android_sdk_path $ANDROID_SDK_ROOT \
-            --android_ndk_path $ANDROID_NDK_HOME \
-            --enable_pybind \
-            --build_wheel \
-            --config Release \
-            --parallel
+          mkdir -p build/Release
+          cmake \
+            -GNinja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-21 \
+            -DANDROID_NDK=$ANDROID_NDK_HOME \
+            -DSQLOUD_ROOT=$SQLOUD_ROOT \
+            -Donnxruntime_RUN_ONNX_TESTS=OFF \
+            -Donnxruntime_BUILD_SHARED_LIB=ON \
+            -Donnxruntime_ENABLE_PYTHON=ON \
+            -Donnxruntime_PYTHON_EXECUTABLE=$(which python3.13) \
+            -Donnxruntime_DEV_MODE=OFF \
+            -Donnxruntime_BUILD_DEBUGING_SYMBOLS=OFF \
+            -Donnxruntime_BUILD_UNIT_TESTS=OFF \
+            -Donnxruntime_MINIMAL_BUILD=OFF \
+            -Donnxruntime_EXTENDED_DISABLE_SYSTEM_LIB=ON \
+            -DCMAKE_CXX_FLAGS="-D_GLIBCXX_USE_CXX11_ABI=1" \
+            -B build/Release \
+            -S .
+          
+          cmake --build build/Release --config Release --parallel
         timeout-minutes: 120
         
+      - name: Find built wheel
+        run: |
+          find onnxruntime/build -name "*.whl" -type f 2>/dev/null
+          find onnxruntime/build -name "onnxruntime*.so" -type f 2>/dev/null | head -5
+          
       - name: Upload wheel
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: onnxruntime-cp313-aarch64
-          path: onnxruntime/build/Release/dist/*.whl
+          path: |
+            onnxruntime/build/Release/dist/*.whl
+            onnxruntime/build/Release/*.so
           retention-days: 30
           if-no-files-found: error
           
