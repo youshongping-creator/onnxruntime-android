@@ -69,17 +69,52 @@ jobs:
           if [ -f "$TOOLCHAIN_FILE" ]; then
             echo "✅ Android toolchain file found: $TOOLCHAIN_FILE"
             echo "File size: $(wc -l < "$TOOLCHAIN_FILE") lines"
+            NDK_VERSION="26b"
           else
             echo "❌ Android toolchain file NOT found at: $TOOLCHAIN_FILE"
             echo "Searching for toolchain files..."
             find "$NDK_DIR" -name "android.toolchain.cmake" -type f 2>/dev/null | head -10
             echo "Listing NDK build/cmake directory:"
             ls -la "$NDK_DIR/build/cmake/" 2>/dev/null || echo "build/cmake directory not found"
+            
+            # NDK 26b might not have standard toolchain file, try NDK 25b as fallback
+            echo "⚠️  NDK 26b lacks standard toolchain file, trying NDK 25b as fallback..."
+            echo "=== Installing Android NDK 25b (fallback) ==="
+            sdkmanager --install "ndk;25b" 2>&1 | tee sdkmanager-25b.log
+            
+            # Find NDK 25b directory
+            NDK_DIR_25B=$(find "$SQLOUD_ROOT/ndk" -maxdepth 1 -type d -name "25.*" -o -name "25b" 2>/dev/null | head -1)
+            if [ -z "$NDK_DIR_25B" ]; then
+              NDK_DIR_25B="$SQLOUD_ROOT/ndk/25b"
+              echo "⚠️  Using default NDK 25b path: $NDK_DIR_25B"
+            else
+              echo "✅ Found NDK 25b directory: $NDK_DIR_25B"
+            fi
+            
+            # Check if NDK 25b has toolchain file
+            TOOLCHAIN_FILE_25B="$NDK_DIR_25B/build/cmake/android.toolchain.cmake"
+            if [ -f "$TOOLCHAIN_FILE_25B" ]; then
+              echo "✅ NDK 25b has toolchain file: $TOOLCHAIN_FILE_25B"
+              NDK_DIR="$NDK_DIR_25B"
+              TOOLCHAIN_FILE="$TOOLCHAIN_FILE_25B"
+              NDK_VERSION="25b"
+              echo "Switching to NDK $NDK_VERSION with proper toolchain support"
+            else
+              echo "❌ NDK 25b also lacks toolchain file at: $TOOLCHAIN_FILE_25B"
+              echo "Will attempt to build without explicit toolchain file, using CMake built-in support"
+              NDK_VERSION="26b"  # Stick with 26b even without toolchain
+            fi
           fi
+          
+          echo "Selected NDK version: $NDK_VERSION"
+          echo "NDK directory: $NDK_DIR"
+          echo "Toolchain file: ${TOOLCHAIN_FILE:-<none, using CMake built-in>}"
           
           echo "SQLOUD_ROOT=$SQLOUD_ROOT" >> $GITHUB_ENV
           echo "ANDROID_NDK_HOME=$NDK_DIR" >> $GITHUB_ENV
           echo "NDK_DIR=$NDK_DIR" >> $GITHUB_ENV
+          echo "TOOLCHAIN_FILE=${TOOLCHAIN_FILE:-}" >> $GITHUB_ENV
+          echo "NDK_VERSION=${NDK_VERSION:-26b}" >> $GITHUB_ENV
         timeout-minutes: 30
         
       - name: Install Python dependencies
@@ -208,16 +243,56 @@ jobs:
           echo "ANDROID_NDK_HOME: $ANDROID_NDK_HOME"
           echo "SQLOUD_ROOT: $SQLOUD_ROOT"
           
-          TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake"
-          echo "Toolchain file path: $TOOLCHAIN_FILE"
-          if [ -f "$TOOLCHAIN_FILE" ]; then
-            echo "✅ Toolchain file exists"
+          # Smart toolchain file detection for Android NDK
+          echo "=== Smart toolchain file detection ==="
+          
+          # Check if TOOLCHAIN_FILE is already set from environment and valid
+          if [ -n "$TOOLCHAIN_FILE" ] && [ -f "$TOOLCHAIN_FILE" ]; then
+            echo "✅ Using toolchain file from environment: $TOOLCHAIN_FILE"
+            # Keep using the existing TOOLCHAIN_FILE
           else
-            echo "❌ Toolchain file NOT found!"
-            echo "Searching for alternative toolchain files..."
-            find "$ANDROID_NDK_HOME" -name "android.toolchain.cmake" -type f 2>/dev/null
-            echo "Will attempt CMake anyway..."
+            echo "No valid toolchain file in environment, starting detection..."
+            
+            # Search for toolchain files in NDK directory
+            echo "Searching for android.toolchain.cmake files..."
+            FOUND_TOOLCHAINS=$(find "$ANDROID_NDK_HOME" -name "android.toolchain.cmake" -type f 2>/dev/null | head -5)
+            
+            if [ -n "$FOUND_TOOLCHAINS" ]; then
+              echo "Found toolchain files:"
+              echo "$FOUND_TOOLCHAINS"
+              # Use the first found toolchain file
+              TOOLCHAIN_FILE=$(echo "$FOUND_TOOLCHAINS" | head -1)
+              echo "✅ Using toolchain file: $TOOLCHAIN_FILE"
+            else
+              echo "❌ No android.toolchain.cmake files found in NDK!"
+              
+              # Check for CMake's built-in Android support
+              echo "Checking for CMake built-in Android support..."
+              CMAKE_ANDROID_MODULE=$(cmake --system-information 2>/dev/null | grep -i "android" || echo "No Android module found")
+              echo "CMake Android support: $CMAKE_ANDROID_MODULE"
+              
+              # Try to find CMake's Platform/Android.cmake
+              CMAKE_PREFIX=$(cmake --system-information 2>/dev/null | grep '^CMAKE_ROOT' | cut -d '"' -f2)
+              if [ -n "$CMAKE_PREFIX" ]; then
+                CMAKE_ANDROID_FILE="$CMAKE_PREFIX/Modules/Platform/Android.cmake"
+                if [ -f "$CMAKE_ANDROID_FILE" ]; then
+                  echo "✅ Found CMake built-in Android support: $CMAKE_ANDROID_FILE"
+                  # We'll let CMake use its built-in Android support without explicit toolchain
+                  TOOLCHAIN_FILE=""
+                else
+                  echo "❌ CMake built-in Android support not found"
+                  # Create a minimal toolchain file as last resort
+                  echo "Will attempt to create minimal toolchain configuration..."
+                  TOOLCHAIN_FILE=""
+                fi
+              else
+                echo "⚠️ Could not determine CMake prefix"
+                TOOLCHAIN_FILE=""
+              fi
+            fi
           fi
+          
+          echo "Final toolchain file: ${TOOLCHAIN_FILE:-<using CMake built-in Android support>}"
           
           echo "=== Checking Ninja ==="
           which ninja || echo "Ninja not in PATH"
@@ -226,27 +301,44 @@ jobs:
           echo "=== Starting CMake configuration (with detailed output) ==="
           # Build Python wheel with onnxruntime
           set +e  # Don't exit on error for CMake
-          cmake \
+          
+          # Build CMake command with conditional toolchain file
+          CMAKE_CMD="cmake \
             -GNinja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_FILE" \
             -DANDROID_ABI=arm64-v8a \
             -DANDROID_PLATFORM=android-21 \
-            -DANDROID_NDK="$ANDROID_NDK_HOME" \
-            -DANDROID_SDK_ROOT="$SQLOUD_ROOT" \
-            -DSQLOUD_ROOT="$SQLOUD_ROOT" \
+            -DANDROID_NDK=\"$ANDROID_NDK_HOME\" \
+            -DANDROID_SDK_ROOT=\"$SQLOUD_ROOT\" \
+            -DSQLOUD_ROOT=\"$SQLOUD_ROOT\" \
             -Donnxruntime_RUN_ONNX_TESTS=OFF \
             -Donnxruntime_BUILD_SHARED_LIB=ON \
             -Donnxruntime_ENABLE_PYTHON=ON \
-            -Donnxruntime_PYTHON_EXECUTABLE="$(which python3.13)" \
+            -Donnxruntime_PYTHON_EXECUTABLE=\"$(which python3.13)\" \
             -Donnxruntime_DEV_MODE=OFF \
             -Donnxruntime_BUILD_DEBUG_SYMBOLS=OFF \
             -Donnxruntime_BUILD_UNIT_TESTS=OFF \
             -Donnxruntime_BUILD_PYTHON_WHEELS=ON \
             -Donnxruntime_MINIMAL_BUILD=OFF \
-            -DCMAKE_CXX_FLAGS="-D_GLIBCXX_USE_CXX11_ABI=1" \
-            -B build/Release \
-            -S "$CMAKE_SOURCE_DIR" 2>&1 | tee cmake_output.log
+            -DCMAKE_CXX_FLAGS=\"-D_GLIBCXX_USE_CXX11_ABI=1\""
+          
+          # Add toolchain file if found
+          if [ -n "$TOOLCHAIN_FILE" ] && [ -f "$TOOLCHAIN_FILE" ]; then
+            CMAKE_CMD="$CMAKE_CMD -DCMAKE_TOOLCHAIN_FILE=\"$TOOLCHAIN_FILE\""
+            echo "Using explicit toolchain file: $TOOLCHAIN_FILE"
+          else
+            echo "No explicit toolchain file, relying on CMake's built-in Android support"
+            # Try to help CMake find Android toolchain
+            CMAKE_CMD="$CMAKE_CMD -DCMAKE_SYSTEM_NAME=Android"
+          fi
+          
+          # Complete CMake command
+          CMAKE_CMD="$CMAKE_CMD -B build/Release -S \"$CMAKE_SOURCE_DIR\""
+          
+          echo "Executing CMake command:"
+          echo "$CMAKE_CMD"
+          
+          eval "$CMAKE_CMD 2>&1 | tee cmake_output.log"
           
           CMAKE_EXIT_CODE=$?
           set -e  # Restore error exit
