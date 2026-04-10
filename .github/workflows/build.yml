@@ -25,97 +25,88 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get install -y wget unzip curl git cmake ninja-build openjdk-17-jdk
-          # Verify ninja installation
+          # Set Java 17 as default
+          sudo update-alternatives --set java /usr/lib/jvm/java-17-openjdk-amd64/bin/java
+          export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+          echo "JAVA_HOME=$JAVA_HOME" >> $GITHUB_ENV
+          # Verify installations
+          java -version
           ninja --version
-          echo "✅ Ninja installed"
+          echo "✅ Java 17 and Ninja installed"
           
-      - name: Download Android SDK command-line tools
+      - name: Setup Android NDK from system (no SDK download needed)
         run: |
-          mkdir -p $HOME/android-sdk/cmdline-tools
-          cd $HOME/android-sdk/cmdline-tools
-          wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O cmdline-tools.zip
-          unzip -q cmdline-tools.zip
-          mv cmdline-tools latest
-          rm cmdline-tools.zip
+          echo "=== Using system pre-installed Android NDK ==="
           
-      - name: Setup Android SDK and NDK
-        run: |
-          export SQLOUD_ROOT=$HOME/android-sdk
-          export PATH=$HOME/android-sdk/cmdline-tools/latest/bin:$PATH
+          # Check for system NDK installations
+          echo "Searching for system NDK installations..."
+          SYSTEM_NDK_PATHS=(
+            "/usr/local/lib/android/sdk/ndk"
+            "/opt/android-sdk/ndk"
+            "$HOME/android-sdk/ndk"
+            "/usr/lib/android-sdk/ndk"
+          )
           
-          echo "=== Setting up Android SDK ==="
-          echo "SDK root: $SQLOUD_ROOT"
-          echo "PATH: $PATH"
+          NDK_DIR=""
+          for path in "${SYSTEM_NDK_PATHS[@]}"; do
+            if [ -d "$path" ]; then
+              echo "✅ Found NDK directory: $path"
+              # Find the highest version NDK
+              LATEST_NDK=$(find "$path" -maxdepth 1 -type d -name "*" | sort -V | tail -1)
+              if [ -n "$LATEST_NDK" ] && [ -d "$LATEST_NDK" ]; then
+                NDK_DIR="$LATEST_NDK"
+                echo "✅ Selected NDK: $NDK_DIR"
+                break
+              fi
+            fi
+          done
           
-          yes | sdkmanager --licenses 2>/dev/null || true
-          echo "=== Installing Android NDK 26b ==="
-          sdkmanager --install "ndk;26b" "platforms;android-21" "build-tools;34.0.0" 2>&1 | tee sdkmanager.log
-          
-          echo "=== Verifying NDK installation ==="
-          echo "NDK directory: $SQLOUD_ROOT/ndk/"
-          ls -la "$SQLOUD_ROOT/ndk/" || echo "NDK directory not found"
-          
-          # Find the actual NDK directory (it might have a version suffix)
-          NDK_DIR=$(find "$SQLOUD_ROOT/ndk" -maxdepth 1 -type d -name "26.*" -o -name "26b" 2>/dev/null | head -1)
+          # Fallback: use the NDK path found in previous build logs
           if [ -z "$NDK_DIR" ]; then
-            NDK_DIR="$SQLOUD_ROOT/ndk/26b"
-            echo "⚠️  Using default NDK path: $NDK_DIR"
-          else
-            echo "✅ Found NDK directory: $NDK_DIR"
+            echo "⚠️  No system NDK found in standard locations"
+            NDK_DIR="/usr/local/lib/android/sdk/ndk/27.3.13750724"
+            echo "⚠️  Trying fallback path from previous build: $NDK_DIR"
           fi
           
-          echo "=== Checking for Android toolchain file ==="
-          TOOLCHAIN_FILE="$NDK_DIR/build/cmake/android.toolchain.cmake"
-          if [ -f "$TOOLCHAIN_FILE" ]; then
-            echo "✅ Android toolchain file found: $TOOLCHAIN_FILE"
-            echo "File size: $(wc -l < "$TOOLCHAIN_FILE") lines"
-            NDK_VERSION="26b"
+          # Verify NDK directory exists
+          if [ ! -d "$NDK_DIR" ]; then
+            echo "❌ NDK directory not found: $NDK_DIR"
+            echo "Listing possible NDK locations:"
+            find /usr -name "android.toolchain.cmake" 2>/dev/null | head -10
+            find /usr/local -name "android.toolchain.cmake" 2>/dev/null | head -10
+            find /opt -name "android.toolchain.cmake" 2>/dev/null | head -10
+            echo "Will attempt build with CMake auto-detection"
+            NDK_DIR=""
           else
-            echo "❌ Android toolchain file NOT found at: $TOOLCHAIN_FILE"
-            echo "Searching for toolchain files..."
-            find "$NDK_DIR" -name "android.toolchain.cmake" -type f 2>/dev/null | head -10
-            echo "Listing NDK build/cmake directory:"
-            ls -la "$NDK_DIR/build/cmake/" 2>/dev/null || echo "build/cmake directory not found"
+            echo "✅ Verified NDK directory: $NDK_DIR"
+            echo "NDK version: $(basename "$NDK_DIR")"
             
-            # NDK 26b might not have standard toolchain file, try NDK 25b as fallback
-            echo "⚠️  NDK 26b lacks standard toolchain file, trying NDK 25b as fallback..."
-            echo "=== Installing Android NDK 25b (fallback) ==="
-            sdkmanager --install "ndk;25b" 2>&1 | tee sdkmanager-25b.log
-            
-            # Find NDK 25b directory
-            NDK_DIR_25B=$(find "$SQLOUD_ROOT/ndk" -maxdepth 1 -type d -name "25.*" -o -name "25b" 2>/dev/null | head -1)
-            if [ -z "$NDK_DIR_25B" ]; then
-              NDK_DIR_25B="$SQLOUD_ROOT/ndk/25b"
-              echo "⚠️  Using default NDK 25b path: $NDK_DIR_25B"
+            # Check for toolchain file
+            TOOLCHAIN_FILE="$NDK_DIR/build/cmake/android.toolchain.cmake"
+            if [ -f "$TOOLCHAIN_FILE" ]; then
+              echo "✅ Found Android toolchain file: $TOOLCHAIN_FILE"
             else
-              echo "✅ Found NDK 25b directory: $NDK_DIR_25B"
-            fi
-            
-            # Check if NDK 25b has toolchain file
-            TOOLCHAIN_FILE_25B="$NDK_DIR_25B/build/cmake/android.toolchain.cmake"
-            if [ -f "$TOOLCHAIN_FILE_25B" ]; then
-              echo "✅ NDK 25b has toolchain file: $TOOLCHAIN_FILE_25B"
-              NDK_DIR="$NDK_DIR_25B"
-              TOOLCHAIN_FILE="$TOOLCHAIN_FILE_25B"
-              NDK_VERSION="25b"
-              echo "Switching to NDK $NDK_VERSION with proper toolchain support"
-            else
-              echo "❌ NDK 25b also lacks toolchain file at: $TOOLCHAIN_FILE_25B"
-              echo "Will attempt to build without explicit toolchain file, using CMake built-in support"
-              NDK_VERSION="26b"  # Stick with 26b even without toolchain
+              echo "⚠️  No android.toolchain.cmake found, CMake will use built-in Android support"
+              TOOLCHAIN_FILE=""
             fi
           fi
           
-          echo "Selected NDK version: $NDK_VERSION"
-          echo "NDK directory: $NDK_DIR"
-          echo "Toolchain file: ${TOOLCHAIN_FILE:-<none, using CMake built-in>}"
+          # Set environment variables
+          if [ -n "$NDK_DIR" ]; then
+            echo "ANDROID_NDK_HOME=$NDK_DIR" >> $GITHUB_ENV
+            echo "NDK_DIR=$NDK_DIR" >> $GITHUB_ENV
+          fi
           
-          echo "SQLOUD_ROOT=$SQLOUD_ROOT" >> $GITHUB_ENV
-          echo "ANDROID_NDK_HOME=$NDK_DIR" >> $GITHUB_ENV
-          echo "NDK_DIR=$NDK_DIR" >> $GITHUB_ENV
-          echo "TOOLCHAIN_FILE=${TOOLCHAIN_FILE:-}" >> $GITHUB_ENV
-          echo "NDK_VERSION=${NDK_VERSION:-26b}" >> $GITHUB_ENV
-        timeout-minutes: 30
+          if [ -n "$TOOLCHAIN_FILE" ]; then
+            echo "TOOLCHAIN_FILE=$TOOLCHAIN_FILE" >> $GITHUB_ENV
+          fi
+          
+          echo "=== NDK Setup Summary ==="
+          echo "ANDROID_NDK_HOME: ${NDK_DIR:-<system auto-detection>}"
+          echo "TOOLCHAIN_FILE: ${TOOLCHAIN_FILE:-<CMake built-in support>}"
+          echo "Java version:"
+          java -version
+        timeout-minutes: 10
         
       - name: Install Python dependencies
         run: |
@@ -198,14 +189,21 @@ jobs:
           
       - name: Build onnxruntime with cmake
         run: |
-          export SQLOUD_ROOT=$HOME/android-sdk
-          export ANDROID_NDK_HOME=$SQLOUD_ROOT/ndk/26b
-          
           echo "=== Debug Information ==="
           echo "Current directory: $(pwd)"
-          echo "SQLOUD_ROOT: $SQLOUD_ROOT"
-          echo "ANDROID_NDK_HOME: $ANDROID_NDK_HOME"
           echo "Python3.13 path: $(which python3.13)"
+          echo "Java version:"
+          java -version
+          
+          # Use environment variables set by previous step
+          echo "ANDROID_NDK_HOME: ${ANDROID_NDK_HOME:-<not set, using CMake auto-detection>}"
+          echo "TOOLCHAIN_FILE: ${TOOLCHAIN_FILE:-<not set>}"
+          
+          # Set SQLOUD_ROOT if not set (for compatibility)
+          if [ -z "$SQLOUD_ROOT" ]; then
+            export SQLOUD_ROOT=$HOME/android-sdk
+            echo "SQLOUD_ROOT set to: $SQLOUD_ROOT"
+          fi
           
           # Check onnxruntime directory
           echo "=== Checking onnxruntime directory ==="
