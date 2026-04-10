@@ -20,3 +20,4 @@ pip install onnxruntime-cp313-aarch64.whl
 - Python: 3.13
 - ONNX Runtime: v1.24.4
 - NDK: r26b
+# Build optimization: Disabled Python for initial Android validation
