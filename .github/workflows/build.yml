@@ -24,11 +24,8 @@ jobs:
           
       - name: Install system dependencies
         run: |
-          sudo apt-get install -y \
-            wget unzip curl git cmake ninja-build \
-            openjdk-17-jdk swig \
-            android-sdk sdkmanager
-            
+          sudo apt-get install -y wget unzip curl git cmake ninja-build openjdk-17-jdk
+          
       - name: Download Android SDK command-line tools
         run: |
           mkdir -p $HOME/android-sdk/cmdline-tools
@@ -37,15 +34,16 @@ jobs:
           unzip -q cmdline-tools.zip
           mv cmdline-tools latest
           rm cmdline-tools.zip
-          echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> $GITHUB_ENV
           
-      - name: Download Android NDK
+      - name: Setup Android SDK/NDK
         run: |
+          export ANDROID_SDK_ROOT=$HOME/android-sdk
           export PATH=$HOME/android-sdk/cmdline-tools/latest/bin:$PATH
           yes | sdkmanager --licenses 2>/dev/null || true
-          sdkmanager --install "ndk;26b" 2>&1 | tail -5
+          sdkmanager --install "ndk;26b" "platforms;android-21" "build-tools;34.0.0" 2>&1 | tail -5
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
           echo "ANDROID_NDK_HOME=$HOME/android-sdk/ndk/26b" >> $GITHUB_ENV
-        timeout-minutes: 30
+        timeout-minutes: 20
         
       - name: Install Python dependencies
         run: |
@@ -59,18 +57,21 @@ jobs:
           
       - name: Build onnxruntime
         run: |
-          export ANDROID_NDK=$ANDROID_NDK_HOME
           export ANDROID_SDK_ROOT=$HOME/android-sdk
-          export PATH=$ANDROID_NDK:$PATH
+          export ANDROID_NDK_HOME=$HOME/android-sdk/ndk/26b
+          export PATH=$ANDROID_NDK_HOME:$PATH
+          
           cd onnxruntime
+          
+          # Build with correct Python version format (string, not number)
           ./build.sh --android --android_abi arm64-v8a \
             --android_sdk_path $ANDROID_SDK_ROOT \
-            --android_ndk_path $ANDROID_NDK \
+            --android_ndk_path $ANDROID_NDK_HOME \
             --python_version 3.13 \
             --build_wheel \
             --config Release \
             --parallel
-        timeout-minutes: 300
+        timeout-minutes: 120
         
       - name: Upload wheel
         if: success()
@@ -88,4 +89,3 @@ jobs:
           name: build-logs
           path: onnxruntime/build/Release/**/*.log
           retention-days: 7
-          if-no-files-found: ignore
