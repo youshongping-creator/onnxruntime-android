@@ -7,44 +7,64 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-    container: ubuntu:22.04
+    runs-on: ubuntu-22.04
     
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         
-      - name: Install dependencies
+      - name: Install Python 3.13
         run: |
-          apt-get update && apt-get install -y \
-            python3.13 python3.13-dev python3-pip \
+          sudo apt-get update
+          sudo apt-get install -y software-properties-common
+          sudo add-apt-repository -y ppa:deadsnakes/ppa
+          sudo apt-get update
+          sudo apt-get install -y python3.13 python3.13-dev python3.13-venv python3.13-distutils
+          python3.13 --version
+          
+      - name: Install system dependencies
+        run: |
+          sudo apt-get install -y \
             wget unzip curl git cmake ninja-build \
             openjdk-17-jdk swig \
-            Android-sdk cmdline-tools-latest
-          curl -sS https://bootstrap.pypa.io/get-pip.py | python3.13
-          python3.13 -m pip install --upgrade pip
-          python3.13 -m pip install numpy wheel
+            android-sdk sdkmanager
+            
+      - name: Download Android SDK command-line tools
+        run: |
+          mkdir -p $HOME/android-sdk/cmdline-tools
+          cd $HOME/android-sdk/cmdline-tools
+          wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O cmdline-tools.zip
+          unzip -q cmdline-tools.zip
+          mv cmdline-tools latest
+          rm cmdline-tools.zip
+          echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> $GITHUB_ENV
           
       - name: Download Android NDK
         run: |
-          mkdir -p /opt/android-ndk
-          cd /opt/android-ndk
-          wget -q https://dl.google.com/android/repository/android-ndk-r26b-linux.zip
-          unzip -q android-ndk-r26b-linux.zip
-          echo "ANDROID_NDK_HOME=/opt/android-ndk/android-ndk-r26b" >> $GITHUB_ENV
-          echo "ANDROID_SDK_ROOT=/opt/android-sdk" >> $GITHUB_ENV
+          export PATH=$HOME/android-sdk/cmdline-tools/latest/bin:$PATH
+          yes | sdkmanager --licenses 2>/dev/null || true
+          sdkmanager --install "ndk;26b" 2>&1 | tail -5
+          echo "ANDROID_NDK_HOME=$HOME/android-sdk/ndk/26b" >> $GITHUB_ENV
+        timeout-minutes: 30
+        
+      - name: Install Python dependencies
+        run: |
+          curl -sS https://bootstrap.pypa.io/get-pip.py | python3.13
+          python3.13 -m pip install --upgrade pip setuptools wheel
+          python3.13 -m pip install numpy wheel
           
       - name: Download onnxruntime
         run: |
           git clone --depth 1 --branch v1.24.4 https://github.com/microsoft/onnxruntime
           
-      - name: Build
+      - name: Build onnxruntime
         run: |
           export ANDROID_NDK=$ANDROID_NDK_HOME
+          export ANDROID_SDK_ROOT=$HOME/android-sdk
           export PATH=$ANDROID_NDK:$PATH
           cd onnxruntime
           ./build.sh --android --android_abi arm64-v8a \
-            --android_sdk_path /opt/android-sdk \
+            --android_sdk_path $ANDROID_SDK_ROOT \
             --android_ndk_path $ANDROID_NDK \
             --python_version 3.13 \
             --build_wheel \
