@@ -34,16 +34,23 @@ jobs:
           unzip -q cmdline-tools.zip
           mv cmdline-tools latest
           rm cmdline-tools.zip
+          ls -la $HOME/android-sdk/cmdline-tools/latest/bin/
           
-      - name: Setup Android SDK/NDK
+      - name: Setup Android SDK and NDK
         run: |
           export ANDROID_SDK_ROOT=$HOME/android-sdk
           export PATH=$HOME/android-sdk/cmdline-tools/latest/bin:$PATH
+          
+          # Accept licenses
           yes | sdkmanager --licenses 2>/dev/null || true
-          sdkmanager --install "ndk;26b" "platforms;android-21" "build-tools;34.0.0" 2>&1 | tail -5
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
-          echo "ANDROID_NDK_HOME=$HOME/android-sdk/ndk/26b" >> $GITHUB_ENV
-        timeout-minutes: 20
+          
+          # Install NDK and build tools
+          sdkmanager --install "ndk;26b" "platforms;android-21" "build-tools;34.0.0" 2>&1
+          
+          # Verify installation
+          ls -la $HOME/android-sdk/ndk/
+          ls -la $HOME/android-sdk/ndk/26b/
+        timeout-minutes: 30
         
       - name: Install Python dependencies
         run: |
@@ -59,11 +66,15 @@ jobs:
         run: |
           export ANDROID_SDK_ROOT=$HOME/android-sdk
           export ANDROID_NDK_HOME=$HOME/android-sdk/ndk/26b
-          export PATH=$ANDROID_NDK_HOME:$PATH
+          
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
+          ls -la $ANDROID_SDK_ROOT/
+          ls -la $ANDROID_NDK_HOME/
           
           cd onnxruntime
           
-          # Build with Python 3.13 (version auto-detected from python3.13)
+          # Build with Python binding
           ./build.sh --android --android_abi arm64-v8a \
             --android_sdk_path $ANDROID_SDK_ROOT \
             --android_ndk_path $ANDROID_NDK_HOME \
