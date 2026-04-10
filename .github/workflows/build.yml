@@ -112,7 +112,12 @@ jobs:
         run: |
           curl -sS https://bootstrap.pypa.io/get-pip.py | python3.13
           python3.13 -m pip install --upgrade pip setuptools wheel
-          python3.13 -m pip install numpy wheel
+          # Install numpy and verify it's available
+          python3.13 -m pip install numpy
+          python3.13 -c "import numpy; print(f'NumPy version: {numpy.__version__}')"
+          # Also install pybind11 for CMake detection
+          python3.13 -m pip install pybind11
+          echo "✅ Python dependencies installed"
           
       - name: Download onnxruntime
         run: |
