@@ -65,6 +65,8 @@ jobs:
           cd onnxruntime
           
           mkdir -p build/Release
+          
+          # Build Python wheel with onnxruntime
           cmake \
             -GNinja \
             -DCMAKE_BUILD_TYPE=Release \
@@ -80,13 +82,20 @@ jobs:
             -Donnxruntime_DEV_MODE=OFF \
             -Donnxruntime_BUILD_DEBUGING_SYMBOLS=OFF \
             -Donnxruntime_BUILD_UNIT_TESTS=OFF \
+            -Donnxruntime_BUILD_PYTHON_WHEELS=ON \
             -Donnxruntime_MINIMAL_BUILD=OFF \
-            -Donnxruntime_EXTENDED_DISABLE_SYSTEM_LIB=ON \
             -DCMAKE_CXX_FLAGS="-D_GLIBCXX_USE_CXX11_ABI=1" \
             -B build/Release \
             -S .
           
           cmake --build build/Release --config Release --parallel
+          
+          # Build Python wheel
+          cd build/Release
+          python3.13 -m pip wheel . --no-deps --wheel-dir dist/ 2>&1 || echo "Direct wheel build failed"
+          
+          # Find all built files
+          find . -name "*.whl" -o -name "*.so" | head -20
         timeout-minutes: 300
         
       - name: Find built wheel
