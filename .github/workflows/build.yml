@@ -25,6 +25,9 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get install -y wget unzip curl git cmake ninja-build openjdk-17-jdk
+          # Verify ninja installation
+          ninja --version
+          echo "✅ Ninja installed"
           
       - name: Download Android SDK command-line tools
         run: |
@@ -40,11 +43,43 @@ jobs:
           export SQLOUD_ROOT=$HOME/android-sdk
           export PATH=$HOME/android-sdk/cmdline-tools/latest/bin:$PATH
           
+          echo "=== Setting up Android SDK ==="
+          echo "SDK root: $SQLOUD_ROOT"
+          echo "PATH: $PATH"
+          
           yes | sdkmanager --licenses 2>/dev/null || true
-          sdkmanager --install "ndk;26b" "platforms;android-21" "build-tools;34.0.0" 2>&1 | tail -3
+          echo "=== Installing Android NDK 26b ==="
+          sdkmanager --install "ndk;26b" "platforms;android-21" "build-tools;34.0.0" 2>&1 | tee sdkmanager.log
+          
+          echo "=== Verifying NDK installation ==="
+          echo "NDK directory: $SQLOUD_ROOT/ndk/"
+          ls -la "$SQLOUD_ROOT/ndk/" || echo "NDK directory not found"
+          
+          # Find the actual NDK directory (it might have a version suffix)
+          NDK_DIR=$(find "$SQLOUD_ROOT/ndk" -maxdepth 1 -type d -name "26.*" -o -name "26b" 2>/dev/null | head -1)
+          if [ -z "$NDK_DIR" ]; then
+            NDK_DIR="$SQLOUD_ROOT/ndk/26b"
+            echo "⚠️  Using default NDK path: $NDK_DIR"
+          else
+            echo "✅ Found NDK directory: $NDK_DIR"
+          fi
+          
+          echo "=== Checking for Android toolchain file ==="
+          TOOLCHAIN_FILE="$NDK_DIR/build/cmake/android.toolchain.cmake"
+          if [ -f "$TOOLCHAIN_FILE" ]; then
+            echo "✅ Android toolchain file found: $TOOLCHAIN_FILE"
+            echo "File size: $(wc -l < "$TOOLCHAIN_FILE") lines"
+          else
+            echo "❌ Android toolchain file NOT found at: $TOOLCHAIN_FILE"
+            echo "Searching for toolchain files..."
+            find "$NDK_DIR" -name "android.toolchain.cmake" -type f 2>/dev/null | head -10
+            echo "Listing NDK build/cmake directory:"
+            ls -la "$NDK_DIR/build/cmake/" 2>/dev/null || echo "build/cmake directory not found"
+          fi
           
           echo "SQLOUD_ROOT=$SQLOUD_ROOT" >> $GITHUB_ENV
-          echo "ANDROID_NDK_HOME=$SQLOUD_ROOT/ndk/26b" >> $GITHUB_ENV
+          echo "ANDROID_NDK_HOME=$NDK_DIR" >> $GITHUB_ENV
+          echo "NDK_DIR=$NDK_DIR" >> $GITHUB_ENV
         timeout-minutes: 30
         
       - name: Install Python dependencies
@@ -168,20 +203,42 @@ jobs:
           echo "CMake source directory: $CMAKE_SOURCE_DIR"
           echo "Build directory: build/Release"
           
+          # Verify critical paths before CMake
+          echo "=== Verifying critical paths ==="
+          echo "ANDROID_NDK_HOME: $ANDROID_NDK_HOME"
+          echo "SQLOUD_ROOT: $SQLOUD_ROOT"
+          
+          TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake"
+          echo "Toolchain file path: $TOOLCHAIN_FILE"
+          if [ -f "$TOOLCHAIN_FILE" ]; then
+            echo "✅ Toolchain file exists"
+          else
+            echo "❌ Toolchain file NOT found!"
+            echo "Searching for alternative toolchain files..."
+            find "$ANDROID_NDK_HOME" -name "android.toolchain.cmake" -type f 2>/dev/null
+            echo "Will attempt CMake anyway..."
+          fi
+          
+          echo "=== Checking Ninja ==="
+          which ninja || echo "Ninja not in PATH"
+          ninja --version || echo "Failed to get ninja version"
+          
+          echo "=== Starting CMake configuration (with detailed output) ==="
           # Build Python wheel with onnxruntime
+          set +e  # Don't exit on error for CMake
           cmake \
             -GNinja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
+            -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_FILE" \
             -DANDROID_ABI=arm64-v8a \
             -DANDROID_PLATFORM=android-21 \
-            -DANDROID_NDK=$ANDROID_NDK_HOME \
-            -DANDROID_SDK_ROOT=$SQLOUD_ROOT \
-            -DSQLOUD_ROOT=$SQLOUD_ROOT \
+            -DANDROID_NDK="$ANDROID_NDK_HOME" \
+            -DANDROID_SDK_ROOT="$SQLOUD_ROOT" \
+            -DSQLOUD_ROOT="$SQLOUD_ROOT" \
             -Donnxruntime_RUN_ONNX_TESTS=OFF \
             -Donnxruntime_BUILD_SHARED_LIB=ON \
             -Donnxruntime_ENABLE_PYTHON=ON \
-            -Donnxruntime_PYTHON_EXECUTABLE=$(which python3.13) \
+            -Donnxruntime_PYTHON_EXECUTABLE="$(which python3.13)" \
             -Donnxruntime_DEV_MODE=OFF \
             -Donnxruntime_BUILD_DEBUG_SYMBOLS=OFF \
             -Donnxruntime_BUILD_UNIT_TESTS=OFF \
@@ -191,19 +248,45 @@ jobs:
             -B build/Release \
             -S "$CMAKE_SOURCE_DIR" 2>&1 | tee cmake_output.log
           
+          CMAKE_EXIT_CODE=$?
+          set -e  # Restore error exit
+          
           echo "=== CMake configuration completed ==="
-          echo "CMake exit code: $?"
+          echo "CMake exit code: $CMAKE_EXIT_CODE"
           
-          echo "=== Starting build ==="
-          cmake --build build/Release --config Release --parallel 2>&1 | tee build_output.log
+          # Check if CMake cache was created
+          if [ -f "build/Release/CMakeCache.txt" ]; then
+            echo "✅ CMakeCache.txt created successfully"
+            echo "CMakeCache.txt size: $(wc -l < build/Release/CMakeCache.txt) lines"
+          else
+            echo "❌ CMakeCache.txt NOT created"
+            echo "CMake likely failed to configure"
+          fi
           
-          echo "=== Build completed ==="
-          echo "Build exit code: $?"
-          
-          # Build Python wheel
-          cd build/Release
-          echo "=== Building Python wheel ==="
-          python3.13 -m pip wheel . --no-deps --wheel-dir dist/ 2>&1 | tee wheel_output.log || echo "Direct wheel build failed"
+          # Only attempt build if CMake configuration succeeded
+          if [ $CMAKE_EXIT_CODE -eq 0 ] && [ -f "build/Release/CMakeCache.txt" ]; then
+            echo "=== Starting build (CMake config succeeded) ==="
+            cmake --build build/Release --config Release --parallel 2>&1 | tee build_output.log
+            
+            BUILD_EXIT_CODE=$?
+            echo "=== Build completed ==="
+            echo "Build exit code: $BUILD_EXIT_CODE"
+            
+            if [ $BUILD_EXIT_CODE -eq 0 ]; then
+              # Build Python wheel
+              cd build/Release
+              echo "=== Building Python wheel ==="
+              python3.13 -m pip wheel . --no-deps --wheel-dir dist/ 2>&1 | tee wheel_output.log || echo "Direct wheel build failed"
+            else
+              echo "❌ Build failed, skipping wheel creation"
+              cd build/Release  # Still cd to collect logs
+            fi
+          else
+            echo "❌ CMake configuration failed, skipping build"
+            echo "Will still attempt to collect debug information"
+            mkdir -p build/Release
+            cd build/Release
+          fi
           
           # Find all built files
           echo "=== Searching for built files ==="
