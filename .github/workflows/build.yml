@@ -55,17 +55,86 @@ jobs:
           
       - name: Download onnxruntime
         run: |
-          git clone --depth 1 --branch v1.24.4 https://github.com/microsoft/onnxruntime
+          echo "=== Cloning onnxruntime ==="
+          echo "Repository: https://github.com/microsoft/onnxruntime"
+          echo "Branch/Tag: v1.24.4"
+          
+          # Try cloning with verbose output
+          if git clone --verbose --depth 1 --branch v1.24.4 https://github.com/microsoft/onnxruntime 2>&1 | tee clone.log; then
+            echo "✅ onnxruntime cloned successfully"
+          else
+            echo "❌ git clone failed with branch v1.24.4, trying latest release tag"
+            # Try to get latest release tag
+            LATEST_TAG=$(curl -s https://api.github.com/repos/microsoft/onnxruntime/releases/latest | grep '"tag_name"' | cut -d'"' -f4)
+            echo "Latest release tag: $LATEST_TAG"
+            
+            if [ -z "$LATEST_TAG" ]; then
+              LATEST_TAG="v1.24.4"  # fallback
+            fi
+            
+            echo "Trying with tag: $LATEST_TAG"
+            if git clone --verbose --depth 1 --branch "$LATEST_TAG" https://github.com/microsoft/onnxruntime 2>&1 | tee clone.log; then
+              echo "✅ onnxruntime cloned with tag $LATEST_TAG"
+            else
+              echo "❌ Failed with tag $LATEST_TAG, trying main branch"
+              if git clone --verbose --depth 1 https://github.com/microsoft/onnxruntime 2>&1 | tee clone.log; then
+                echo "✅ onnxruntime cloned from main branch"
+                cd onnxruntime
+                echo "Checking out latest stable tag..."
+                LATEST_STABLE=$(git describe --tags --abbrev=0 2>/dev/null || echo "v1.24.4")
+                git checkout "$LATEST_STABLE" 2>&1 | tee -a clone.log
+                cd ..
+                echo "✅ Checked out $LATEST_STABLE"
+              else
+                echo "❌ All clone attempts failed"
+                echo "=== Clone log ==="
+                cat clone.log
+                exit 1
+              fi
+            fi
+          fi
+          
+          echo "=== Verifying clone ==="
+          echo "Directory contents:"
+          ls -la onnxruntime/
+          
+          echo "=== Checking for CMakeLists.txt ==="
+          if [ -f "onnxruntime/CMakeLists.txt" ]; then
+            echo "✅ CMakeLists.txt found"
+            echo "File size: $(wc -l < onnxruntime/CMakeLists.txt) lines"
+          else
+            echo "❌ CMakeLists.txt not found"
+            echo "Listing all files in onnxruntime:"
+            find onnxruntime -type f -name "*.txt" -o -name "CMake*" -o -name "*.cmake" | head -30
+            echo "Top-level files:"
+            ls -la onnxruntime/
+            exit 1
+          fi
           
       - name: Build onnxruntime with cmake
         run: |
           export SQLOUD_ROOT=$HOME/android-sdk
           export ANDROID_NDK_HOME=$SQLOUD_ROOT/ndk/26b
           
+          echo "=== Debug Information ==="
+          echo "Current directory: $(pwd)"
+          echo "SQLOUD_ROOT: $SQLOUD_ROOT"
+          echo "ANDROID_NDK_HOME: $ANDROID_NDK_HOME"
+          echo "Python3.13 path: $(which python3.13)"
+          
+          # Check onnxruntime directory
+          echo "=== Checking onnxruntime directory ==="
+          ls -la onnxruntime/
+          echo "CMakeLists.txt exists: $(if [ -f "onnxruntime/CMakeLists.txt" ]; then echo "✅ Yes"; else echo "❌ No"; fi)"
+          
           cd onnxruntime
+          echo "=== Inside onnxruntime directory ==="
+          echo "Current directory: $(pwd)"
+          ls -la | head -20
           
           mkdir -p build/Release
           
+          echo "=== Starting CMake configuration ==="
           # Build Python wheel with onnxruntime
           cmake \
             -GNinja \
@@ -74,28 +143,47 @@ jobs:
             -DANDROID_ABI=arm64-v8a \
             -DANDROID_PLATFORM=android-21 \
             -DANDROID_NDK=$ANDROID_NDK_HOME \
+            -DANDROID_SDK_ROOT=$SQLOUD_ROOT \
             -DSQLOUD_ROOT=$SQLOUD_ROOT \
             -Donnxruntime_RUN_ONNX_TESTS=OFF \
             -Donnxruntime_BUILD_SHARED_LIB=ON \
             -Donnxruntime_ENABLE_PYTHON=ON \
             -Donnxruntime_PYTHON_EXECUTABLE=$(which python3.13) \
             -Donnxruntime_DEV_MODE=OFF \
-            -Donnxruntime_BUILD_DEBUGING_SYMBOLS=OFF \
+            -Donnxruntime_BUILD_DEBUG_SYMBOLS=OFF \
             -Donnxruntime_BUILD_UNIT_TESTS=OFF \
             -Donnxruntime_BUILD_PYTHON_WHEELS=ON \
             -Donnxruntime_MINIMAL_BUILD=OFF \
             -DCMAKE_CXX_FLAGS="-D_GLIBCXX_USE_CXX11_ABI=1" \
             -B build/Release \
-            -S .
+            -S . 2>&1 | tee cmake_output.log
           
-          cmake --build build/Release --config Release --parallel
+          echo "=== CMake configuration completed ==="
+          echo "CMake exit code: $?"
+          
+          echo "=== Starting build ==="
+          cmake --build build/Release --config Release --parallel 2>&1 | tee build_output.log
+          
+          echo "=== Build completed ==="
+          echo "Build exit code: $?"
           
           # Build Python wheel
           cd build/Release
-          python3.13 -m pip wheel . --no-deps --wheel-dir dist/ 2>&1 || echo "Direct wheel build failed"
+          echo "=== Building Python wheel ==="
+          python3.13 -m pip wheel . --no-deps --wheel-dir dist/ 2>&1 | tee wheel_output.log || echo "Direct wheel build failed"
           
           # Find all built files
+          echo "=== Searching for built files ==="
           find . -name "*.whl" -o -name "*.so" | head -20
+          
+          # Check if wheel was created
+          if ls dist/*.whl 2>/dev/null; then
+            echo "✅ Wheel file created successfully"
+          else
+            echo "❌ No wheel file found in dist/"
+            echo "Listing dist directory:"
+            ls -la dist/ 2>/dev/null || echo "dist/ directory does not exist"
+          fi
         timeout-minutes: 300
         
       - name: Find built wheel
