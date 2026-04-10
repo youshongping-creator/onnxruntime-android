@@ -99,11 +99,21 @@ jobs:
           ls -la onnxruntime/
           
           echo "=== Checking for CMakeLists.txt ==="
-          if [ -f "onnxruntime/CMakeLists.txt" ]; then
-            echo "✅ CMakeLists.txt found"
+          # Check for nested directory structure (onnxruntime/onnxruntime/)
+          if [ -f "onnxruntime/onnxruntime/CMakeLists.txt" ]; then
+            echo "✅ CMakeLists.txt found at onnxruntime/onnxruntime/CMakeLists.txt"
+            echo "File size: $(wc -l < onnxruntime/onnxruntime/CMakeLists.txt) lines"
+            # Rename directory to simplify path
+            mv onnxruntime onnxruntime-full
+            mv onnxruntime-full/onnxruntime onnxruntime
+            echo "✅ Simplified directory structure"
+          elif [ -f "onnxruntime/CMakeLists.txt" ]; then
+            echo "✅ CMakeLists.txt found at onnxruntime/CMakeLists.txt"
             echo "File size: $(wc -l < onnxruntime/CMakeLists.txt) lines"
           else
             echo "❌ CMakeLists.txt not found"
+            echo "Searching for CMakeLists.txt in all locations:"
+            find . -name "CMakeLists.txt" -type f | head -10
             echo "Listing all files in onnxruntime:"
             find onnxruntime -type f -name "*.txt" -o -name "CMake*" -o -name "*.cmake" | head -30
             echo "Top-level files:"
