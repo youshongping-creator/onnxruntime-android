@@ -63,11 +63,11 @@ jobs:
           
           cd onnxruntime
           
-          # Build with correct Python version format (string, not number)
+          # Build with Python 3.13 (version auto-detected from python3.13)
           ./build.sh --android --android_abi arm64-v8a \
             --android_sdk_path $ANDROID_SDK_ROOT \
             --android_ndk_path $ANDROID_NDK_HOME \
-            --python_version 3.13 \
+            --enable_pybind \
             --build_wheel \
             --config Release \
             --parallel
